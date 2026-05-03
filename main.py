@@ -93,7 +93,7 @@ class ApexBot(commands.Bot):
                     channel = self.get_channel(cid)
                     if channel:
                         try:
-                            await channel.send(notif_msg)
+                            await channel.send(notif_msg, silent=True)
                         except discord.Forbidden:
                             print(f"Permission denied for channel: {cid}")
                     else:
