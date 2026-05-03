@@ -56,10 +56,10 @@ class ApexBot(commands.Bot):
             rk_curr = data.get("ranked", {}).get("current", {}).get("map")
 
             if self.last_br_map and self.last_br_map != br_curr:
-                if channel: await channel.send(f"**[カジュアル]** のマップが **[{br_curr}]** に変更されました。")
+                if channel: await channel.send(f"**カジュアル** のマップが **{br_curr}** に変更されました。")
             
             if self.last_ranked_map and self.last_ranked_map != rk_curr:
-                if channel: await channel.send(f"**[ランク]** のマップが **[{rk_curr}]** に変更されました。")
+                if channel: await channel.send(f"**ランク** のマップが **{rk_curr}** に変更されました。")
 
             self.last_br_map = br_curr
             self.last_ranked_map = rk_curr
