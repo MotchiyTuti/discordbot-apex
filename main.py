@@ -1,32 +1,39 @@
+import os
 import requests
+from dotenv import load_dotenv
 
-# 1. あなたのAPIキーを設定
-API_KEY = "8d3fdfcb60d8738591a5b4a8dea518b1"
+# 1. .envファイルから環境変数を読み込む
+load_dotenv()
 
-# 2. エンドポイントの設定（マップローテーション取得用）
-url = f"https://api.mozambiqueheere.com/maprotation?auth={API_KEY}"
+# 2. 環境変数からAPIキーを取得
+API_KEY = os.getenv("ALS_API_KEY")
 
-try:
-    # 3. APIリクエストの実行
-    response = requests.get(url)
+if not API_KEY:
+    print("エラー: APIキーが設定されていません。'.env' ファイルを確認してください。")
+    exit()
+
+def check_map_rotation():
+    # エンドポイント
+    url = "https://api.mozambiqueheere.com/maprotation"
     
-    # ステータスコードが200(成功)か確認
-    response.raise_for_status()
+    # クエリパラメータとして認証情報を渡す
+    params = {
+        "auth": API_KEY
+    }
 
-    # 4. データの解析
-    data = response.json()
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        br = data['battle_royale']['current']
+        
+        print(f"✅ 接続成功")
+        print(f"現在のマップ: {br['map']}")
+        print(f"終了まであと: {br['remainingMins']} 分")
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ エラーが発生しました: {e}")
 
-    # 結果の表示
-    current_map = data['battle_royale']['current']['map']
-    remaining_time = data['battle_royale']['current']['remainingTimer']
-    next_map = data['battle_royale']['next']['map']
-
-    print(f"--- Apex Legends Map Status ---")
-    print(f"現在のマップ: {current_map}")
-    print(f"残り時間: {remaining_time}")
-    print(f"次のマップ: {next_map}")
-
-except requests.exceptions.HTTPError as err:
-    print(f"HTTPエラーが発生しました: {err}")
-except Exception as e:
-    print(f"エラーが発生しました: {e}")
+if __name__ == "__main__":
+    check_map_rotation()
