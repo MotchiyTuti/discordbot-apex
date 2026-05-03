@@ -24,7 +24,6 @@ class ApexBot(commands.Bot):
         self.last_ranked_map = None
 
     async def setup_hook(self):
-        # ここも class の中なのでインデントが必要
         self.map_monitor.start()
 
     async def on_ready(self):
@@ -32,7 +31,6 @@ class ApexBot(commands.Bot):
 
     @tasks.loop(seconds=60)
     async def map_monitor(self):
-        # ここが関数の中身。さらに1段インデント
         channel = self.get_channel(CHANNEL_ID)
         debug_channel = self.get_channel(DEBUG_CHANNEL_ID)
         url = f"https://api.mozambiquehe.re/maprotation?version=2&auth={ALS_API_KEY}"
@@ -41,7 +39,7 @@ class ApexBot(commands.Bot):
             response = requests.get(url)
             data = response.json()
 
-            # デバッグ送信（エラーで止まらないようにガード）
+            # デバッグ送信
             if DEBUG_MODE and debug_channel:
                 try:
                     debug_json = json.dumps(data, indent=2, ensure_ascii=False)
@@ -73,6 +71,5 @@ class ApexBot(commands.Bot):
     async def before_monitor(self):
         await self.wait_until_ready()
 
-# ここからは class の外なのでインデントを戻す
 bot = ApexBot()
 bot.run(TOKEN)
