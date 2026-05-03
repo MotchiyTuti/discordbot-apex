@@ -1,60 +1,78 @@
 import os
+import discord
 import requests
-import time
+import json
+import io
+from discord.ext import tasks, commands
 from dotenv import load_dotenv
 
 load_dotenv()
 
-def get_map_data(api_key):
-    url = f"https://api.mozambiquehe.re/maprotation?version=2&auth={api_key}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"APIエラー: {e}")
-        return None
+# 設定の読み込み
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+DEBUG_CHANNEL_ID = int(os.getenv("DEBUG_CHANNEL_ID"))
+ALS_API_KEY = os.getenv("ALS_API_KEY")
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
-def monitor_maps():
-    api_key = os.getenv("ALS_API_KEY")
-    if not api_key:
-        print("エラー: ALS_API_KEY が設定されていません。")
-        return
+class ApexBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
+        self.last_br_map = None
+        self.last_ranked_map = None
 
-    # 前回のマップを記録する変数
-    last_br_map = None
-    last_ranked_map = None
+    async def setup_hook(self):
+        # ここも class の中なのでインデントが必要
+        self.map_monitor.start()
 
-    print("マップの監視を開始しました... (Ctrl+C で終了)")
+    async def on_ready(self):
+        print(f'Logged in as {self.user}')
 
-    while True:
-        data = get_map_data(api_key)
+    @tasks.loop(seconds=60)
+    async def map_monitor(self):
+        # ここが関数の中身。さらに1段インデント
+        channel = self.get_channel(CHANNEL_ID)
+        debug_channel = self.get_channel(DEBUG_CHANNEL_ID)
+        url = f"https://api.mozambiquehe.re/maprotation?version=2&auth={ALS_API_KEY}"
         
-        if data:
-            # データの抽出
-            br_current = data.get("battle_royale", {}).get("current", {})
-            rk_current = data.get("ranked", {}).get("current", {})
+        try:
+            response = requests.get(url)
+            data = response.json()
+
+            # デバッグ送信（エラーで止まらないようにガード）
+            if DEBUG_MODE and debug_channel:
+                try:
+                    debug_json = json.dumps(data, indent=2, ensure_ascii=False)
+                    if len(debug_json) < 1900:
+                        await debug_channel.send(f"**[DEBUG LOG]**\n```json\n{debug_json}\n```")
+                    else:
+                        with io.BytesIO(debug_json.encode('utf-8')) as f:
+                            await debug_channel.send("**[DEBUG LOG]** (Data too long)", file=discord.File(f, filename="debug_log.json"))
+                except discord.errors.Forbidden:
+                    print("Debug channel access denied.")
+
+            # マップ解析
+            br_curr = data.get("battle_royale", {}).get("current", {}).get("map")
+            rk_curr = data.get("ranked", {}).get("current", {}).get("map")
+
+            if self.last_br_map and self.last_br_map != br_curr:
+                if channel: await channel.send(f"**[カジュアル]** のマップが **[{br_curr}]** に変更されました。")
             
-            curr_br_map = br_current.get("map")
-            curr_rk_map = rk_current.get("map")
+            if self.last_ranked_map and self.last_ranked_map != rk_curr:
+                if channel: await channel.send(f"**[ランク]** のマップが **[{rk_curr}]** に変更されました。")
 
-            # カジュアルの変更検知
-            if last_br_map is not None and last_br_map != curr_br_map:
-                print(f"[カジュアル]のマップが[{curr_br_map}]に変更されました。")
-            
-            # ランクの変更検知
-            if last_ranked_map is not None and last_ranked_map != curr_rk_map:
-                print(f"[ランク]のマップが[{curr_rk_map}]に変更されました。")
+            self.last_br_map = br_curr
+            self.last_ranked_map = rk_curr
 
-            # 初回実行時または変更時にログを表示したい場合はここ
-            # print(f"Check: BR={curr_br_map}, Ranked={curr_rk_map}")
+        except Exception as e:
+            print(f"Error: {e}")
 
-            # 状態を更新
-            last_br_map = curr_br_map
-            last_ranked_map = curr_rk_map
+    @map_monitor.before_loop
+    async def before_monitor(self):
+        await self.wait_until_ready()
 
-        # 60秒待機してから再チェック
-        time.sleep(60)
-
-if __name__ == "__main__":
-    monitor_maps()
+# ここからは class の外なのでインデントを戻す
+bot = ApexBot()
+bot.run(TOKEN)
