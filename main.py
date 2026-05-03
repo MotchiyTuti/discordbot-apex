@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 設定の読み込み
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 DEBUG_CHANNEL_ID = int(os.getenv("DEBUG_CHANNEL_ID"))
@@ -26,13 +25,33 @@ class ApexBot(commands.Bot):
     async def setup_hook(self):
         self.map_monitor.start()
 
-    async def on_ready(self):
-        print(f'Logged in as {self.user}')
+    async def update_nickname(self, map_name):
+        """全サーバーのニックネームをランクマップ名に更新する共通処理"""
+        new_nick = f"Map: {map_name}"
         for guild in self.guilds:
             try:
-                await guild.me.edit(nick="ApexMapRote")
-            except:
-                continue
+                # 現在のニックネームと異なる場合のみAPIを叩く（負荷軽減）
+                if guild.me.display_name != new_nick:
+                    await guild.me.edit(nick=new_nick)
+            except discord.Forbidden:
+                print(f"[{guild.name}] 権限不足で名前を変更できません。")
+            except Exception as e:
+                print(f"[{guild.name}] エラー: {e}")
+
+    async def on_ready(self):
+        print(f'Logged in as {self.user}')
+        # 起動直後に一度APIを叩いて現在のマップを反映させる
+        url = f"https://api.mozambiquehe.re/maprotation?version=2&auth={ALS_API_KEY}"
+        try:
+            response = requests.get(url)
+            data = response.json()
+            rk_curr = data.get("ranked", {}).get("current", {}).get("map")
+            if rk_curr:
+                await self.update_nickname(rk_curr)
+                self.last_ranked_map = rk_curr
+                print(f"Initial nickname set to: {rk_curr}")
+        except Exception as e:
+            print(f"Initial setup error: {e}")
 
     @tasks.loop(seconds=60)
     async def map_monitor(self):
@@ -60,11 +79,17 @@ class ApexBot(commands.Bot):
             br_curr = data.get("battle_royale", {}).get("current", {}).get("map")
             rk_curr = data.get("ranked", {}).get("current", {}).get("map")
 
-            if self.last_br_map and self.last_br_map != br_curr:
-                if channel: await channel.send(f"**カジュアル** のマップが **{br_curr}** に変更されました。")
-            
+            # --- ランクマップ変更検知 ---
             if self.last_ranked_map and self.last_ranked_map != rk_curr:
-                if channel: await channel.send(f"**ランク** のマップが **{rk_curr}** に変更されました。")
+                if channel: 
+                    await channel.send(f"**ランク** のマップが **{rk_curr}** に変更されました。")
+                # ニックネーム更新
+                await self.update_nickname(rk_curr)
+            
+            # --- カジュアルマップ変更検知 ---
+            if self.last_br_map and self.last_br_map != br_curr:
+                if channel: 
+                    await channel.send(f"**カジュアル** のマップが **{br_curr}** に変更されました。")
 
             self.last_br_map = br_curr
             self.last_ranked_map = rk_curr
