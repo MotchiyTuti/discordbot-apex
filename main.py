@@ -28,6 +28,11 @@ class ApexBot(commands.Bot):
 
     async def on_ready(self):
         print(f'Logged in as {self.user}')
+        for guild in self.guilds:
+            try:
+                await guild.me.edit(nick="ApexMapRote")
+            except:
+                continue
 
     @tasks.loop(seconds=60)
     async def map_monitor(self):
