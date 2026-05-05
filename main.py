@@ -17,7 +17,15 @@ MY_USER_ID = int(os.getenv("MY_USER_ID")) if os.getenv("MY_USER_ID") else None
 
 DATA_FILE = "channels.json"
 
-# 管理者権限または指定したユーザーIDのみ実行可能にする権限チェック
+# デバッグメッセージを送信するヘルパー関数
+async def send_debug(bot, message):
+    if DEBUG_MODE and DEBUG_CHANNEL_ID:
+        channel = bot.get_channel(DEBUG_CHANNEL_ID)
+        if channel:
+            # 2000文字制限に配慮し、長い場合はカット
+            await channel.send(f"**[DEBUG]** {message[:1900]}", silent=True)
+
+# 権限チェック用の関数
 def is_admin_or_me():
     async def predicate(interaction: discord.Interaction) -> bool:
         if interaction.user.guild_permissions.administrator or interaction.user.id == MY_USER_ID:
@@ -56,12 +64,12 @@ class ApexBot(commands.Bot):
         with open(DATA_FILE, "w") as f:
             json.dump(self.config, f)
 
-    # 起動時にスラッシュコマンドを同期し、監視ループを開始
+    # 起動時のセットアップ
     async def setup_hook(self):
         await self.tree.sync()
         self.map_monitor.start()
 
-    # サーバーごとの設定に従ってBotのニックネームを更新
+    # ニックネームを更新
     async def update_nicknames(self, br_map, rk_map):
         for guild in self.guilds:
             mode = self.config["guild_nicks"].get(str(guild.id), "ranked")
@@ -69,66 +77,70 @@ class ApexBot(commands.Bot):
             try:
                 if guild.me.display_name != new_nick:
                     await guild.me.edit(nick=new_nick)
-            except Exception:
+            except Exception as e:
+                # ニックネーム更新失敗もデバッグ送信
+                await send_debug(self, f"Nickname update failed in {guild.name}: {e}")
                 continue
 
-    # マップローテーションを監視し、変更があれば通知
+    # メインの監視ループ
     @tasks.loop(seconds=60)
     async def map_monitor(self):
-        # 通知先が一つもなく、デバッグモードでもなければAPIを叩かない
         if not self.config["br"] and not self.config["ranked"] and not DEBUG_MODE:
             return
 
         url = f"https://api.mozambiquehe.re/maprotation?version=2&auth={ALS_API_KEY}"
         try:
-            # タイムアウトを設定（API応答待ちによるフリーズ防止）
             response = requests.get(url, timeout=10)
             data = response.json()
 
-            # デバッグログの送信
-            if DEBUG_MODE and DEBUG_CHANNEL_ID:
-                debug_channel = self.get_channel(DEBUG_CHANNEL_ID)
-                if debug_channel:
-                    debug_json = json.dumps(data, indent=2, ensure_ascii=False)
-                    if len(debug_json) < 1900:
-                        await debug_channel.send(f"**[DEBUG]**\n```json\n{debug_json}\n```")
+            # 取得した生のJSONをデバッグ送信
+            if DEBUG_MODE:
+                debug_json = json.dumps(data, indent=2, ensure_ascii=False)
+                await send_debug(self, f"API Response:\n```json\n{debug_json}\n```")
 
-            # APIから現在のマップ名を取得
             br_curr = data.get("battle_royale", {}).get("current", {}).get("map")
             rk_curr = data.get("ranked", {}).get("current", {}).get("map")
 
-            # 【重要】どちらかのマップ名が取得できない（Noneや空）場合は、その回の処理をスキップ
+            # マップ名がNoneの場合のデバッグとスキップ
             if not br_curr or not rk_curr:
+                await send_debug(self, f"Invalid data received (BR: {br_curr}, Rank: {rk_curr}). Skipping this cycle.")
                 return
 
-            # 初回起動時（Noneの状態）は通知せず、現在のマップ名を保存して終了
+            # 初回データ保持
             if self.last_br_map is None or self.last_ranked_map is None:
                 self.last_br_map = br_curr
                 self.last_ranked_map = rk_curr
                 await self.update_nicknames(br_curr, rk_curr)
+                await send_debug(self, f"Initial map data set: BR={br_curr}, Rank={rk_curr}")
                 return
 
-            # 変更チェック：マップ名が正しく取得できている前提での処理
-            # ニックネームの更新
-            if br_curr != self.last_br_map or rk_curr != self.last_ranked_map:
-                await self.update_nicknames(br_curr, rk_curr)
-
-            # ランクのマップ変更通知
-            if rk_curr != self.last_ranked_map:
-                await self.broadcast_map_update("ranked", f"**ランク** のマップが **{rk_curr}** に変更されました。")
-            
-            # カジュアルのマップ変更通知
+            # 変更検知のデバッグ
+            change_detected = False
             if br_curr != self.last_br_map:
+                await send_debug(self, f"BR Map Change Detected: {self.last_br_map} -> {br_curr}")
                 await self.broadcast_map_update("br", f"**カジュアル** のマップが **{br_curr}** に変更されました。")
+                change_detected = True
+            
+            if rk_curr != self.last_ranked_map:
+                await send_debug(self, f"Rank Map Change Detected: {self.last_ranked_map} -> {rk_curr}")
+                await self.broadcast_map_update("ranked", f"**ランク** のマップが **{rk_curr}** に変更されました。")
+                change_detected = True
 
-            # 今回取得した正常なマップ名を保存
+            # 変更があった場合のみニックネームを更新
+            if change_detected:
+                await self.update_nicknames(br_curr, rk_curr)
+            else:
+                # 1分ごとの生存確認用（DEBUG時のみ）
+                if DEBUG_MODE:
+                    print("No change in map rotation.")
+
             self.last_br_map = br_curr
             self.last_ranked_map = rk_curr
 
         except Exception as e:
-            print(f"Monitor Error: {e}")
+            await send_debug(self, f"Monitor Loop Error: {e}")
 
-    # 登録されたチャンネルへ通知を一斉送信
+    # 通知の一斉送信
     async def broadcast_map_update(self, mode_key, message):
         for cid in self.config[mode_key][:]:
             channel = self.get_channel(cid)
@@ -136,9 +148,9 @@ class ApexBot(commands.Bot):
                 try:
                     await channel.send(message, silent=True)
                 except discord.Forbidden:
-                    pass
+                    await send_debug(self, f"Permission Denied: Cannot send message to channel {cid}")
             else:
-                # チャンネルが見つからない場合はリストから削除
+                await send_debug(self, f"Removing invalid channel ID from config: {cid}")
                 self.config[mode_key].remove(cid)
                 self.save_channels()
 
@@ -151,8 +163,7 @@ bot = ApexBot()
 # --- スラッシュコマンド ---
 
 class MapRote(app_commands.Group):
-    # 通知有効化
-    @app_commands.command(name="enable", description="このチャンネルでマップ通知を有効にします")
+    @app_commands.command(name="enable", description="通知を有効にします")
     @app_commands.choices(mode=[
         app_commands.Choice(name="カジュアル", value="br"),
         app_commands.Choice(name="ランク", value="ranked")
@@ -162,12 +173,12 @@ class MapRote(app_commands.Group):
         if interaction.channel_id not in bot.config[mode]:
             bot.config[mode].append(interaction.channel_id)
             bot.save_channels()
-            await interaction.response.send_message(f"このチャンネルで **{mode}** の通知を有効にしました。", ephemeral=False)
+            await interaction.response.send_message(f"通知を有効にしました。", ephemeral=False)
+            await send_debug(bot, f"Notification ENABLED for {mode} in channel {interaction.channel_id} (User: {interaction.user})")
         else:
-            await interaction.response.send_message("このチャンネルでは既に通知が有効です。", ephemeral=True)
+            await interaction.response.send_message("既に有効です。", ephemeral=True)
 
-    # 通知無効化
-    @app_commands.command(name="disable", description="このチャンネルでマップ通知を無効にします")
+    @app_commands.command(name="disable", description="通知を無効にします")
     @app_commands.choices(mode=[
         app_commands.Choice(name="カジュアル", value="br"),
         app_commands.Choice(name="ランク", value="ranked")
@@ -177,12 +188,12 @@ class MapRote(app_commands.Group):
         if interaction.channel_id in bot.config[mode]:
             bot.config[mode].remove(interaction.channel_id)
             bot.save_channels()
-            await interaction.response.send_message(f"このチャンネルで **{mode}** の通知を無効にしました。", ephemeral=False)
+            await interaction.response.send_message(f"通知を無効にしました。", ephemeral=False)
+            await send_debug(bot, f"Notification DISABLED for {mode} in channel {interaction.channel_id} (User: {interaction.user})")
         else:
-            await interaction.response.send_message("このチャンネルには通知設定がありません。", ephemeral=True)
+            await interaction.response.send_message("設定されていません。", ephemeral=True)
 
-    # ニックネーム表示モード設定
-    @app_commands.command(name="set-nick", description="Botのニックネーム表示モード（カジュアル/ランク）を設定します")
+    @app_commands.command(name="set-nick", description="Botのニックネーム表示モードを設定します")
     @app_commands.choices(mode=[
         app_commands.Choice(name="カジュアルを表示", value="br"),
         app_commands.Choice(name="ランクを表示", value="ranked")
@@ -199,10 +210,10 @@ class MapRote(app_commands.Group):
         try:
             await interaction.guild.me.edit(nick=new_nick)
             await interaction.response.send_message(f"表示モードを **{mode}** に変更しました。", ephemeral=False)
+            await send_debug(bot, f"Nickname mode changed to {mode} in guild {interaction.guild.name}")
         except discord.Forbidden:
-            await interaction.response.send_message("権限不足によりニックネームを変更できませんでしたが、設定は保存されました。", ephemeral=False)
+            await interaction.response.send_message("権限不足でニックネームを変更できませんでした。", ephemeral=False)
+            await send_debug(bot, f"Failed to change nick in {interaction.guild.name} due to missing permissions.")
 
-# コマンドグループの登録
 bot.tree.add_command(MapRote(name="map-rote"))
-
 bot.run(TOKEN)
