@@ -85,57 +85,57 @@ class ApexBot(commands.Bot):
     # メインの監視ループ
     @tasks.loop(seconds=60)
     async def map_monitor(self):
+        # 通知先が一つもなく、デバッグモードでもなければ何もしない
         if not self.config["br"] and not self.config["ranked"] and not DEBUG_MODE:
             return
 
         url = f"https://api.mozambiquehe.re/maprotation?version=2&auth={ALS_API_KEY}"
         try:
+            # タイムアウトを設定してリクエスト
             response = requests.get(url, timeout=10)
             data = response.json()
 
-            # 取得した生のJSONをデバッグ送信
             if DEBUG_MODE:
                 debug_json = json.dumps(data, indent=2, ensure_ascii=False)
-                await send_debug(self, f"API Response:\n```json\n{debug_json}\n```")
+                # ログが多すぎる場合は生データのみ表示
+                print("API data fetched.") 
 
             br_curr = data.get("battle_royale", {}).get("current", {}).get("map")
             rk_curr = data.get("ranked", {}).get("current", {}).get("map")
 
-            # マップ名がNoneの場合のデバッグとスキップ
-            if not br_curr or not rk_curr:
-                await send_debug(self, f"Invalid data received (BR: {br_curr}, Rank: {rk_curr}). Skipping this cycle.")
+            # 1. APIから正しいデータが取れていない場合は処理をスキップ（Noneバグ対策）
+            if br_curr is None or rk_curr is None:
+                await send_debug(self, f"Warning: API returned None (BR: {br_curr}, Rank: {rk_curr}). Skipping.")
                 return
 
-            # 初回データ保持
+            # 2. 初回起動時の処理（変数がNoneの時だけ実行）
             if self.last_br_map is None or self.last_ranked_map is None:
                 self.last_br_map = br_curr
                 self.last_ranked_map = rk_curr
                 await self.update_nicknames(br_curr, rk_curr)
-                await send_debug(self, f"Initial map data set: BR={br_curr}, Rank={rk_curr}")
-                return
+                await send_debug(self, f"Bot started. Initial maps: BR={br_curr}, Rank={rk_curr}")
+                return # 初回は「変更」ではないのでここで終了
 
-            # 変更検知のデバッグ
+            # 3. 変更検知ロジック
             change_detected = False
+
+            # カジュアルの変更チェック
             if br_curr != self.last_br_map:
-                await send_debug(self, f"BR Map Change Detected: {self.last_br_map} -> {br_curr}")
+                await send_debug(self, f"BR Map Change: {self.last_br_map} -> {br_curr}")
                 await self.broadcast_map_update("br", f"**カジュアル** のマップが **{br_curr}** に変更されました。")
+                self.last_br_map = br_curr # ここで値を更新
                 change_detected = True
-            
+
+            # ランクの変更チェック
             if rk_curr != self.last_ranked_map:
-                await send_debug(self, f"Rank Map Change Detected: {self.last_ranked_map} -> {rk_curr}")
+                await send_debug(self, f"Rank Map Change: {self.last_ranked_map} -> {rk_curr}")
                 await self.broadcast_map_update("ranked", f"**ランク** のマップが **{rk_curr}** に変更されました。")
+                self.last_ranked_map = rk_curr # ここで値を更新
                 change_detected = True
 
             # 変更があった場合のみニックネームを更新
             if change_detected:
                 await self.update_nicknames(br_curr, rk_curr)
-            else:
-                # 1分ごとの生存確認用（DEBUG時のみ）
-                if DEBUG_MODE:
-                    print("No change in map rotation.")
-
-            self.last_br_map = br_curr
-            self.last_ranked_map = rk_curr
 
         except Exception as e:
             await send_debug(self, f"Monitor Loop Error: {e}")
