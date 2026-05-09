@@ -109,7 +109,7 @@ class ApexBot(commands.Bot):
                 return
 
             # 2. 初回起動時の処理（変数がNoneの時だけ実行）
-            if self.last_br_map is None or self.last_ranked_map is None:
+            if self.last_br_map is None and self.last_ranked_map is None:
                 self.last_br_map = br_curr
                 self.last_ranked_map = rk_curr
                 await self.update_nicknames(br_curr, rk_curr)
